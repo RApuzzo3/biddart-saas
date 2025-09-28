@@ -1,0 +1,60 @@
+*.log
+.DS_Store
+.env
+.env.backup
+.env.production
+.env.local
+.env.herd
+.phpactor.json
+.phpunit.result.cache
+/.fleet
+/.idea
+/.nova
+/.phpunit.cache
+/.vscode
+/.zed
+/auth.json
+/node_modules
+/public/build
+/public/hot
+/public/storage
+/storage/*.key
+/storage/pail
+/vendor
+Homestead.json
+Homestead.yaml
+Thumbs.db
+
+# Development files
+setup-herd.bat
+setup-herd.ps1
+herd.conf
+
+# Database
+database/*.sqlite
+database/*.sqlite-journal
+
+# Logs
+storage/logs/*.log
+
+# Cache
+bootstrap/cache/*.php
+storage/framework/cache/*
+storage/framework/sessions/*
+storage/framework/views/*
+
+# Compiled assets
+public/css/app.css
+public/js/app.js
+public/mix-manifest.json
+
+# IDE and OS files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Deployment
+deploy.php
+.deployer/
