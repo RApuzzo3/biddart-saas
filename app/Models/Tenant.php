@@ -38,27 +38,31 @@ class Tenant extends Model
     }
 
     /**
-     * Get the events for the tenant.
+     * Get total revenue for this tenant.
      */
-    public function events(): HasMany
+    public function getTotalRevenue(): float
     {
-        return $this->hasMany(Event::class);
+        return $this->checkoutSessions()
+            ->where('status', 'completed')
+            ->sum('total_amount');
     }
 
     /**
-     * Get the bidders for the tenant.
+     * Get platform fees earned from this tenant.
      */
-    public function bidders(): HasMany
+    public function getPlatformFeesEarned(): float
     {
-        return $this->hasMany(Bidder::class);
+        return $this->checkoutSessions()
+            ->where('status', 'completed')
+            ->sum('platform_fee');
     }
 
     /**
-     * Get the bid item categories for the tenant.
+     * Get Square access token for this tenant.
      */
-    public function bidItemCategories(): HasMany
+    public function getSquareAccessToken(): ?string
     {
-        return $this->hasMany(BidItemCategory::class);
+        return $this->config['square_access_token'] ?? null;
     }
 
     /**
@@ -78,5 +82,58 @@ class Tenant extends Model
     {
         return in_array($this->subscription_status, ['active', 'trial']) && 
                ($this->subscription_ends_at === null || $this->subscription_ends_at->isFuture());
+    }
+
+    /**
+     * Get Square access token for this tenant.
+     */
+    public function getSquareAccessToken(): ?string
+    {
+        return $this->config['square_access_token'] ?? null;
+    }
+
+    /**
+     * Get Square application ID for this tenant.
+     */
+    public function getSquareApplicationId(): ?string
+    {
+        return $this->config['square_application_id'] ?? null;
+    }
+
+    /**
+     * Get Square environment (sandbox/production) for this tenant.
+     */
+    public function getSquareEnvironment(): string
+    {
+        return $this->config['square_environment'] ?? 'sandbox';
+    }
+
+    /**
+     * Set Square credentials for this tenant.
+     */
+    public function setSquareCredentials(string $accessToken, string $applicationId, string $environment = 'sandbox'): void
+    {
+        $config = $this->config ?? [];
+        $config['square_access_token'] = $accessToken;
+        $config['square_application_id'] = $applicationId;
+        $config['square_environment'] = $environment;
+        
+        $this->update(['config' => $config]);
+    }
+
+    /**
+     * Check if Square is configured for this tenant.
+     */
+    public function hasSquareConfigured(): bool
+    {
+        return !empty($this->getSquareAccessToken()) && !empty($this->getSquareApplicationId());
+    }
+
+    /**
+     * Get Square webhook signature key for this tenant.
+     */
+    public function getSquareWebhookSignatureKey(): ?string
+    {
+        return $this->config['square_webhook_signature_key'] ?? null;
     }
 }

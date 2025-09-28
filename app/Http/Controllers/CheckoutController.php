@@ -5,6 +5,8 @@ namespace App\Http\Controllers;
 use App\Models\Bidder;
 use App\Models\CheckoutSession;
 use App\Models\Event;
+use App\Services\SquareService;
+use App\Helpers\TenantHelper;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 
@@ -170,7 +172,16 @@ class CheckoutController extends Controller
                 ->with('info', 'This checkout session is not available for card processing.');
         }
 
-        return view('tenant.checkout.square', compact('event', 'checkoutSession'));
+        $tenant = TenantHelper::current();
+        
+        // Check if Square is configured for this tenant
+        if (!$tenant->hasSquareConfigured()) {
+            return redirect()
+                ->route('checkout.show', [$event, $checkoutSession])
+                ->with('error', 'Payment processing is not configured. Please contact support.');
+        }
+
+        return view('tenant.checkout.square', compact('event', 'checkoutSession', 'tenant'));
     }
 
     /**
@@ -182,14 +193,26 @@ class CheckoutController extends Controller
             'source_id' => 'required|string', // Square payment token
         ]);
 
-        // TODO: Implement Square API payment processing
-        // This would integrate with Square's Payment API
+        $tenant = TenantHelper::current();
         
+        // Check if Square is configured for this tenant
+        if (!$tenant->hasSquareConfigured()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'Payment processing is not configured.',
+            ], 400);
+        }
+
+        DB::beginTransaction();
         try {
-            // Simulate Square payment processing
-            $paymentResult = $this->processSquarePaymentAPI($checkoutSession, $validated['source_id']);
+            // Initialize Square service with tenant credentials
+            $squareService = new SquareService($tenant);
+            
+            // Process payment through Square
+            $paymentResult = $squareService->processPayment($checkoutSession, $validated['source_id']);
             
             if ($paymentResult['success']) {
+                // Update checkout session with Square payment details
                 $checkoutSession->update([
                     'status' => 'completed',
                     'square_payment_id' => $paymentResult['payment_id'],
@@ -198,15 +221,21 @@ class CheckoutController extends Controller
                     'completed_at' => now(),
                 ]);
 
+                // Mark associated bids as paid
                 $checkoutSession->markAsCompleted();
+
+                DB::commit();
 
                 return response()->json([
                     'success' => true,
                     'message' => 'Payment processed successfully!',
                     'receipt_url' => $paymentResult['receipt_url'],
+                    'receipt_number' => $paymentResult['receipt_number'],
                 ]);
             } else {
                 $checkoutSession->update(['status' => 'failed']);
+                
+                DB::rollback();
                 
                 return response()->json([
                     'success' => false,
@@ -216,6 +245,8 @@ class CheckoutController extends Controller
 
         } catch (\Exception $e) {
             $checkoutSession->update(['status' => 'failed']);
+            
+            DB::rollback();
             
             return response()->json([
                 'success' => false,
@@ -275,23 +306,55 @@ class CheckoutController extends Controller
 
         $validated = $request->validate([
             'reason' => 'required|string|max:255',
+            'amount' => 'nullable|numeric|min:0|max:' . $checkoutSession->total_amount,
         ]);
+
+        $tenant = TenantHelper::current();
+        $refundAmount = $validated['amount'] ?? $checkoutSession->total_amount;
 
         DB::beginTransaction();
         try {
-            // TODO: Implement Square refund API if it was a card payment
+            $refundResult = ['success' => true]; // Default for cash/check payments
             
+            // Process Square refund if it was a card payment
+            if ($checkoutSession->payment_method === 'card' && $checkoutSession->square_payment_id) {
+                if (!$tenant->hasSquareConfigured()) {
+                    return response()->json([
+                        'success' => false,
+                        'message' => 'Cannot process refund - Square not configured.',
+                    ], 400);
+                }
+
+                $squareService = new SquareService($tenant);
+                $refundResult = $squareService->refundPayment(
+                    $checkoutSession->square_payment_id,
+                    (int) round($refundAmount * 100), // Convert to cents
+                    $validated['reason']
+                );
+
+                if (!$refundResult['success']) {
+                    DB::rollback();
+                    return response()->json([
+                        'success' => false,
+                        'message' => $refundResult['error'] ?? 'Refund failed.',
+                    ], 400);
+                }
+            }
+            
+            // Update checkout session
             $checkoutSession->update([
                 'status' => 'refunded',
                 'payment_details' => array_merge($checkoutSession->payment_details ?? [], [
                     'refund_reason' => $validated['reason'],
+                    'refund_amount' => $refundAmount,
                     'refunded_at' => now()->toISOString(),
                     'refunded_by' => auth()->id(),
+                    'square_refund_id' => $refundResult['refund_id'] ?? null,
                 ]),
             ]);
 
-            // Mark associated bids as unpaid
-            if ($checkoutSession->items) {
+            // Mark associated bids as unpaid if full refund
+            if ($refundAmount == $checkoutSession->total_amount && $checkoutSession->items) {
                 foreach ($checkoutSession->items as $item) {
                     if (isset($item['bid_id'])) {
                         \App\Models\Bid::find($item['bid_id'])?->update(['is_paid' => false]);
@@ -303,7 +366,8 @@ class CheckoutController extends Controller
 
             return response()->json([
                 'success' => true,
-                'message' => 'Checkout refunded successfully.',
+                'message' => 'Refund processed successfully.',
+                'refund_amount' => $refundAmount,
             ]);
 
         } catch (\Exception $e) {
@@ -316,24 +380,4 @@ class CheckoutController extends Controller
         }
     }
 
-    /**
-     * Simulate Square payment processing (placeholder).
-     */
-    private function processSquarePaymentAPI(CheckoutSession $checkoutSession, string $sourceId): array
-    {
-        // This is a placeholder for actual Square API integration
-        // In production, this would make actual API calls to Square
-        
-        return [
-            'success' => true,
-            'payment_id' => 'sq_payment_' . uniqid(),
-            'receipt_url' => 'https://squareup.com/receipt/' . uniqid(),
-            'details' => [
-                'source_id' => $sourceId,
-                'amount' => $checkoutSession->total_amount * 100, // Square uses cents
-                'currency' => 'USD',
-                'processed_at' => now()->toISOString(),
-            ],
-        ];
-    }
 }
